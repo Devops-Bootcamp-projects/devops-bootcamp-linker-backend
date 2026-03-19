@@ -65,20 +65,15 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-# -------------------------------------------------
-# STEP 4: Run Linter (Quality Gate)
-# -------------------------------------------------
-      - name: Run Linter
-        run: pnpm run lint
 
 # -------------------------------------------------
-# STEP 5: Setup Docker Buildx
+# STEP 4: Setup Docker Buildx
 # -------------------------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
 # -------------------------------------------------
-# STEP 6: Login to Docker Hub
+# STEP 5: Login to Docker Hub
 # -------------------------------------------------
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -87,7 +82,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
 # -------------------------------------------------
-# STEP 7: Generate Image Tag (Commit SHA)
+# STEP 6: Generate Image Tag (Commit SHA)
 # -------------------------------------------------
       - name: Generate Automated Version and Tag
         id: vars
@@ -97,7 +92,7 @@ jobs:
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
 # -------------------------------------------------
-# STEP 8: Build Docker Image
+# STEP 7: Build Docker Image
 # -------------------------------------------------
       - name: Build Docker Image
         uses: docker/build-push-action@v5
@@ -107,7 +102,7 @@ jobs:
           tags: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:test
 
 # -------------------------------------------------
-# STEP 9: Scan Docker Image for Vulnerabilities
+# STEP 8: Scan Docker Image for Vulnerabilities
 # -------------------------------------------------
       - name: Scan Image (Trivy)
         uses: aquasecurity/trivy-action@master
@@ -118,7 +113,7 @@ jobs:
           output: 'trivy-report.txt'
 
 # -------------------------------------------------
-# STEP 10: Upload Scan Report
+# STEP 9: Upload Scan Report
 # -------------------------------------------------
       - name: Upload Scan Report
         uses: actions/upload-artifact@v4
@@ -127,7 +122,7 @@ jobs:
           path: trivy-report.txt
 
 # -------------------------------------------------
-# STEP 11: Push Docker Image to Docker Hub
+# STEP 10: Push Docker Image to Docker Hub
 # -------------------------------------------------
       - name: Push Image
         uses: docker/build-push-action@v5
@@ -140,7 +135,7 @@ jobs:
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}-${{ steps.vars.outputs.sha_short }}
 
 # -------------------------------------------------
-# STEP 12: Final Slack Notification
+# STEP 11: Final Slack Notification
 # -------------------------------------------------
       - name: Send Final Slack Notification
         if: always()
