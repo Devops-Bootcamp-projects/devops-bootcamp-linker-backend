@@ -1,27 +1,24 @@
-# -------------------------------------------------
-# PIPELINE NAME: Backend DevSecOps Pipeline
-# -------------------------------------------------
+name: Backend DevSecOps Pipeline
 
-# -------------------------------------------------
-# TRIGGERS
-# -------------------------------------------------
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
-# -------------------------------------------------
-# GLOBAL VARIABLES
-# -------------------------------------------------
+permissions:
+  contents: write
+  packages: write
+
 env:
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   IMAGE_NAME: devopsbootcamp-backend
   SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 
 jobs:
-# -------------------------------------------------
-# JOB 1: Notify Slack that pipeline started
-# -------------------------------------------------
+
+# -----------------------------------------
+# JOB 1: Notify Start
+# -----------------------------------------
   notify-start:
     runs-on: ubuntu-latest
     steps:
@@ -33,23 +30,24 @@ jobs:
           SLACK_TITLE: Pipeline Initialized
           SLACK_WEBHOOK: ${{ env.SLACK_WEBHOOK }}
 
-# -------------------------------------------------
-# JOB 2: Build, Scan and Push Docker Image
-# -------------------------------------------------
+# -----------------------------------------
+# JOB 2: Build → Scan → Push
+# -----------------------------------------
   build-scan-push:
     needs: notify-start
     runs-on: ubuntu-latest
+
     steps:
-# -------------------------------------------------
-# STEP 1: Checkout Repository
-# -------------------------------------------------
+# -----------------------------------------
+# Checkout
+# -----------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-# -------------------------------------------------
-# STEP 2: Install Node.js and pnpm
-# -------------------------------------------------
-      - name: Install Node.js
+# -----------------------------------------
+# Setup Node + pnpm cache
+# -----------------------------------------
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -59,84 +57,130 @@ jobs:
         with:
           version: 9
 
-# -------------------------------------------------
-# STEP 3: Install Dependencies
-# -------------------------------------------------
+# -----------------------------------------
+# Install Dependencies
+# -----------------------------------------
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
+# -----------------------------------------
+# Lint (NEW)
+# -----------------------------------------
+      - name: Run Backend Linter
+        run: pnpm run lint
 
-# -------------------------------------------------
-# STEP 4: Setup Docker Buildx
-# -------------------------------------------------
+# -----------------------------------------
+# Setup Docker
+# -----------------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-# -------------------------------------------------
-# STEP 5: Login to Docker Hub
-# -------------------------------------------------
+# -----------------------------------------
+# Login Docker Hub
+# -----------------------------------------
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-# -------------------------------------------------
-# STEP 6: Generate Image Tag (Commit SHA)
-# -------------------------------------------------
-      - name: Generate Automated Version and Tag
+# -----------------------------------------
+# Generate Tags
+# -----------------------------------------
+      - name: Generate Version Tag
         id: vars
         run: |
-          VERSION_MINOR=$((0 + ${{ github.run_number }}))
+          VERSION_MINOR=$((5 + ${{ github.run_number }}))
           echo "tag=1.${VERSION_MINOR}" >> $GITHUB_OUTPUT
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-# -------------------------------------------------
-# STEP 7: Build Docker Image
-# -------------------------------------------------
+# -----------------------------------------
+# Build Image (LOCAL ONLY)
+# -----------------------------------------
       - name: Build Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
+          push: false
           load: true
-          tags: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:test
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-# -------------------------------------------------
-# STEP 8: Scan Docker Image for Vulnerabilities
-# -------------------------------------------------
+# -----------------------------------------
+# Scan Image (FAIL ON CRITICAL)
+# -----------------------------------------
       - name: Scan Image (Trivy)
-        uses: aquasecurity/trivy-action@master
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
-          image-ref: '${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:test'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          output: 'trivy-report.txt'
+          image-ref: '${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}'
+          format: table
+          output: trivy-report.txt
+          exit-code: '1'
+          severity: CRITICAL
+          scanners: vuln
 
-# -------------------------------------------------
-# STEP 9: Upload Scan Report
-# -------------------------------------------------
-      - name: Upload Scan Report
+# -----------------------------------------
+# Upload Report
+# -----------------------------------------
+      - name: Upload Trivy Scan Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-trivy-report
           path: trivy-report.txt
+          if-no-files-found: ignore
 
-# -------------------------------------------------
-# STEP 10: Push Docker Image to Docker Hub
-# -------------------------------------------------
-      - name: Push Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}-${{ steps.vars.outputs.sha_short }}
+# -----------------------------------------
+# Slack Scan Summary (NEW)
+# -----------------------------------------
+      - name: Send Trivy Summary to Slack
+        if: always()
+        run: |
+          CRITICAL=$(grep -E "CRITICAL" trivy-report.txt | wc -l || true)
+          HIGH=$(grep -E "HIGH" trivy-report.txt | wc -l || true)
 
-# -------------------------------------------------
-# STEP 11: Final Slack Notification
-# -------------------------------------------------
+          PAYLOAD=$(cat <<EOF
+          {
+            "text": "🔍 *Backend Security Scan*\nImage: ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}\nCRITICAL: $CRITICAL\nHIGH: $HIGH"
+          }
+          EOF
+          )
+
+          curl -X POST -H "Content-type: application/json" \
+            --data "$PAYLOAD" \
+            ${{ env.SLACK_WEBHOOK }}
+
+# -----------------------------------------
+# Commit Report (NEW)
+# -----------------------------------------
+      - name: Commit Trivy Report to Repo
+        if: always()
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          mkdir -p security-reports
+          DATE=$(date +'%Y-%m-%d-%H-%M')
+          [ -f trivy-report.txt ] && mv trivy-report.txt security-reports/backend-trivy-$DATE.txt || echo "No report found"
+
+          git add security-reports/
+          git commit -m "chore: add backend trivy report ($DATE)" || echo "No changes to commit"
+          git push
+
+# -----------------------------------------
+# Push Image (ONLY IF SAFE)
+# -----------------------------------------
+      - name: Push Docker Image
+        if: ${{ success() }}
+        run: |
+          docker tag ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }} ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+          docker push ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+
+# -----------------------------------------
+# Final Slack Notification
+# -----------------------------------------
       - name: Send Final Slack Notification
         if: always()
         uses: rtCamp/action-slack-notify@v2
