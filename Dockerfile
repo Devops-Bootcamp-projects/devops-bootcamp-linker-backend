@@ -16,7 +16,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 # ============================================
 # Build stage
 # ============================================
-FROM deps AS build
+FROM deps AS build 
 COPY . .
 COPY --from=deps /app/node_modules ./node_modules
 
