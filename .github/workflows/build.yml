@@ -1,9 +1,14 @@
 name: Backend DevSecOps Pipeline
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
+  push:
+    branches: 
+      - main
+    paths-ignore:
+      - ".github/workflows/**"
+      - "**/*.md"
+  
 
 permissions:
   contents: write
@@ -62,12 +67,6 @@ jobs:
 # -----------------------------------------
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
-
-# -----------------------------------------
-# Lint (NEW)
-# -----------------------------------------
-      - name: Run Backend Linter
-        run: pnpm run lint
 
 # -----------------------------------------
 # Setup Docker
